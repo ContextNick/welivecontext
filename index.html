@@ -748,16 +748,34 @@
     },
 
     /* ================= EVENT WIRING ================= */
+    // Per-render wiring ONLY. Runs after every innerHTML swap. Must not
+    // attach listeners to `root` itself — that element persists across
+    // renders, so anything bound here would stack up on every render.
     wire(root) {
       const self = this;
 
-      // hover swap
+      // hover swap — bound on freshly-created children, so no accumulation
       root.querySelectorAll('[data-hover]').forEach(el => {
         const base = el.getAttribute('data-base') || el.getAttribute('style');
         const hover = el.getAttribute('data-hover');
         el.addEventListener('mouseenter', () => { el.style.cssText = hover; });
         el.addEventListener('mouseleave', () => { el.style.cssText = base; });
       });
+
+      // keep focus + caret in the search box across re-renders
+      if (self._focusQuery) {
+        const q = root.querySelector('[data-action="query"]');
+        if (q) { q.focus(); const v = q.value; q.value = ''; q.value = v; }
+        self._focusQuery = false;
+      }
+    },
+
+    // Delegated listeners attached ONCE to the persistent #app element.
+    // render() only swaps innerHTML, so #app survives and delegation via
+    // closest() keeps working — re-binding these per render would stack
+    // duplicate handlers and make every click/keystroke/drag fire N times.
+    bindDelegation(root) {
+      const self = this;
 
       // click delegation
       root.addEventListener('click', e => {
@@ -802,40 +820,70 @@
         card.style.opacity = '0.35';
       });
       root.addEventListener('dragend', () => {
-        self.setState({ dragId: null, dragOverCol: null, dragOverIndex: null });
+        self.state.dragId = null; self.state.dragOverCol = null; self.state.dragOverIndex = null;
+        self.render(); // one clean re-render resets opacity + indicators
       });
+      // NOTE: dragover must NOT re-render. Replacing innerHTML mid-drag
+      // destroys the dragged node and the drop target, which flickers and
+      // can abort the drag in some browsers. Instead we stash the target
+      // and paint the drop indicator directly on the live DOM.
       root.addEventListener('dragover', e => {
         if (!self.state.dragId) return;
+        let col, idx;
         const card = e.target.closest('[data-card]');
         if (card) {
           e.preventDefault(); e.stopPropagation();
           const r = card.getBoundingClientRect();
-          const idx = Number(card.dataset.index) + (e.clientY > r.top + r.height / 2 ? 1 : 0);
-          const col = card.dataset.col;
-          if (self.state.dragOverCol !== col || self.state.dragOverIndex !== idx) self.setState({ dragOverCol: col, dragOverIndex: idx });
-          return;
-        }
-        const body = e.target.closest('[data-colbody]');
-        if (body) {
+          idx = Number(card.dataset.index) + (e.clientY > r.top + r.height / 2 ? 1 : 0);
+          col = card.dataset.col;
+        } else {
+          const body = e.target.closest('[data-colbody]');
+          if (!body) return;
           e.preventDefault();
-          const col = body.dataset.col;
-          const n = self.visible().filter(it => !self.isArchived(it) && it.status === col).length;
-          if (self.state.dragOverCol !== col || self.state.dragOverIndex !== n) self.setState({ dragOverCol: col, dragOverIndex: n });
+          col = body.dataset.col;
+          idx = self.visible().filter(it => !self.isArchived(it) && it.status === col).length;
+        }
+        if (self.state.dragOverCol !== col || self.state.dragOverIndex !== idx) {
+          self.state.dragOverCol = col; self.state.dragOverIndex = idx;
+          self.paintDrag();
         }
       });
       root.addEventListener('drop', e => {
         if (!self.state.dragId) return;
         e.preventDefault(); e.stopPropagation();
-        self.move(self.state.dragId, self.state.dragOverCol, self.state.dragOverIndex);
+        const id = self.state.dragId, col = self.state.dragOverCol, idx = self.state.dragOverIndex;
         self.state.dragId = null; self.state.dragOverCol = null; self.state.dragOverIndex = null;
-        // move() already re-renders
+        self.move(id, col, idx); // move() re-renders (and clears the indicator)
       });
+    },
 
-      // keep focus + caret in the search box across re-renders
-      if (self._focusQuery) {
-        const q = root.querySelector('[data-action="query"]');
-        if (q) { q.focus(); const v = q.value; q.value = ''; q.value = v; }
-        self._focusQuery = false;
+    // Live drop feedback painted directly onto the DOM during a drag,
+    // so no re-render is needed until the drop lands.
+    paintDrag() {
+      const root = document.getElementById('app');
+      const st = this.state;
+      root.querySelectorAll('[data-colbody]').forEach(b => {
+        const active = b.dataset.col === st.dragOverCol;
+        b.style.background = active ? 'rgba(92,184,178,0.12)' : 'transparent';
+        b.style.outline = active ? '1px solid var(--wlc-sea-moss-green)' : '1px solid transparent';
+      });
+      let line = this._dropLine;
+      if (!line) {
+        line = this._dropLine = document.createElement('div');
+        line.style.cssText = 'height: 3px; background: var(--wlc-sea-moss-green); margin: 3px 0; border-radius: 2px; pointer-events: none;';
+      }
+      if (line.parentNode) line.parentNode.removeChild(line);
+      if (st.dragOverCol == null) return;
+      const body = root.querySelector('[data-colbody][data-col="' + st.dragOverCol + '"]');
+      if (!body) return;
+      const cards = Array.prototype.slice.call(body.querySelectorAll('[data-card]'));
+      if (st.dragOverIndex < cards.length) {
+        body.insertBefore(line, cards[st.dragOverIndex].parentNode);
+      } else if (cards.length) {
+        const lastWrap = cards[cards.length - 1].parentNode;
+        body.insertBefore(line, lastWrap.nextSibling);
+      } else {
+        body.appendChild(line);
       }
     },
 
@@ -905,6 +953,7 @@
     init() {
       const loaded = this.load();
       this.state = Object.assign(this.baseState(), { items: loaded.items, settings: loaded.settings });
+      this.bindDelegation(document.getElementById('app')); // once — survives re-renders
       this.render();
     }
   };
