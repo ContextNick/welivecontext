@@ -986,8 +986,12 @@
       });
     },
 
-    // Live drop feedback painted directly onto the DOM during a drag,
-    // so no re-render is needed until the drop lands.
+    // Live drop feedback painted directly onto the DOM during a drag.
+    // CRITICAL: only paint-only CSS (background, outline, box-shadow) —
+    // never insert/move elements or change box size here. Mutating layout
+    // under the cursor mid-drag makes native HTML5 drag stop firing
+    // dragover until the mouse moves again (the "freeze"). box-shadow and
+    // outline don't reflow, so the element under the pointer never shifts.
     paintDrag() {
       const root = document.getElementById('app');
       const st = this.state;
@@ -996,23 +1000,16 @@
         b.style.background = active ? 'rgba(92,184,178,0.12)' : 'transparent';
         b.style.outline = active ? '1px solid var(--wlc-sea-moss-green)' : '1px solid transparent';
       });
-      let line = this._dropLine;
-      if (!line) {
-        line = this._dropLine = document.createElement('div');
-        line.style.cssText = 'height: 3px; background: var(--wlc-sea-moss-green); margin: 3px 0; border-radius: 2px; pointer-events: none;';
-      }
-      if (line.parentNode) line.parentNode.removeChild(line);
+      root.querySelectorAll('[data-card]').forEach(c => { c.style.boxShadow = ''; });
       if (st.dragOverCol == null) return;
       const body = root.querySelector('[data-colbody][data-col="' + st.dragOverCol + '"]');
       if (!body) return;
       const cards = Array.prototype.slice.call(body.querySelectorAll('[data-card]'));
+      if (!cards.length) return; // empty column: the body highlight is the cue
       if (st.dragOverIndex < cards.length) {
-        body.insertBefore(line, cards[st.dragOverIndex].parentNode);
-      } else if (cards.length) {
-        const lastWrap = cards[cards.length - 1].parentNode;
-        body.insertBefore(line, lastWrap.nextSibling);
+        cards[st.dragOverIndex].style.boxShadow = 'inset 0 3px 0 0 var(--wlc-sea-moss-green)';   // insert above this card
       } else {
-        body.appendChild(line);
+        cards[cards.length - 1].style.boxShadow = 'inset 0 -3px 0 0 var(--wlc-sea-moss-green)';  // insert at the end
       }
     },
 
@@ -1102,8 +1099,62 @@
     }
   };
 
-  App.init();
   window.WLCTracker = App; // handy for the console
+
+  /* ===== Password gate (in-page; light deterrent, not hard security) =====
+     Only the SHA-256 hash of the password lives here. An unlock token
+     (the same hash) is stored on the device so people aren't re-prompted
+     every visit; changing the password below invalidates every stored
+     unlock automatically. */
+  const GATE_HASH = 'bee111eca90c948fa76c0147870d9d6e44c7a589a6805292637e9537f941292e'; // SHA-256 of the studio password
+  const GATE_STORE = 'wlc-gate';
+
+  async function sha256Hex(str) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.prototype.map.call(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
+  }
+  function gateUnlocked() {
+    try { return localStorage.getItem(GATE_STORE) === GATE_HASH; } catch (e) { return false; }
+  }
+  let _booted = false;
+  function bootApp() { if (!_booted) { _booted = true; App.init(); } }
+  function showGate() {
+    const g = document.createElement('div');
+    g.id = 'wlc-gate';
+    // frosted glass: blurs the board rendered behind it so you can sense it through the panel
+    g.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(27,44,38,0.35);-webkit-backdrop-filter:blur(9px) saturate(1.1);backdrop-filter:blur(9px) saturate(1.1);font-family:var(--font-body);';
+    g.innerHTML =
+      '<form style="width:340px;max-width:88vw;background:rgba(255,255,255,0.72);-webkit-backdrop-filter:blur(24px) saturate(1.4);backdrop-filter:blur(24px) saturate(1.4);padding:28px 26px;display:flex;flex-direction:column;gap:14px;border:1px solid rgba(255,255,255,0.55);border-radius:16px;box-shadow:0 16px 48px rgba(27,44,38,0.30);">'
+      + '<img src="' + WLC_LOGO + '" alt="We Live Context" style="width:170px;max-width:80%;height:auto;display:block;margin:4px auto 8px;filter:brightness(0);">'
+      + '<div style="font-size:13px;color:var(--wlc-grey-mid);line-height:1.4;text-align:center;">Enter the studio password to open the work tracker.</div>'
+      + '<input id="wlc-gate-input" type="password" autocomplete="current-password" placeholder="Password" style="border:1px solid var(--wlc-line);border-radius:0;padding:10px 12px;font-size:14px;color:var(--wlc-dark-grey);">'
+      + '<div id="wlc-gate-err" style="font-size:12px;color:var(--wlc-vintage-red);min-height:15px;line-height:1.2;"></div>'
+      + '<button type="submit" style="border:0;background:var(--wlc-sea-moss-green);color:var(--wlc-rover-green);padding:11px 16px;font-size:13px;font-weight:700;letter-spacing:0.04em;cursor:pointer;border-radius:0;">Enter</button>'
+      + '</form>';
+    document.body.appendChild(g);
+    const input = g.querySelector('#wlc-gate-input');
+    const err = g.querySelector('#wlc-gate-err');
+    input.focus();
+    g.querySelector('form').addEventListener('submit', async e => {
+      e.preventDefault();
+      let ok = false;
+      try { ok = (await sha256Hex(input.value)) === GATE_HASH; } catch (_) { ok = false; }
+      if (ok) {
+        try { localStorage.setItem(GATE_STORE, GATE_HASH); } catch (_) {}
+        g.style.transition = 'opacity 0.25s';
+        g.style.opacity = '0';
+        setTimeout(() => g.remove(), 260);
+      } else {
+        err.textContent = 'Incorrect password.';
+        input.value = ''; input.focus();
+      }
+    });
+  }
+
+  // Render the board first so it shows (blurred) behind the glass gate,
+  // then overlay the password panel when the device isn't unlocked yet.
+  bootApp();
+  if (!gateUnlocked()) showGate();
 })();
 </script>
 </body>
