@@ -260,8 +260,8 @@
     },
     scheduleRefresh() { clearTimeout(this._rt); this._rt = setTimeout(() => this.refreshFromRemote(), 300); },
     async refreshFromRemote() {
-      // don't yank the board out from under an active drag or a half-filled new-job form
-      if (this.state.dragId || this.state.drawer === 'new') { this._pending = true; return; }
+      // don't yank the board out from under an active drag or an open editor
+      if (this.state.dragId || this.state.drawer) { this._pending = true; return; }
       const r = await this.dbLoad();
       if (!r.ok) return;
       this.state.items = r.items;
@@ -843,7 +843,14 @@
         + '</div>';
       } else if (sel) {
         const d = this.due(sel);
-        const cell = (label, val) => '<div style="display: flex; flex-direction: column; gap: 4px;"><div style="font-size: 10.5px; letter-spacing: 0.1em; color: var(--wlc-grey-mid);">' + label + '</div><div style="font-size: 13.5px; font-weight: 500;">' + esc(val) + '</div></div>';
+        const withVal = (arr, v) => (v != null && v !== '' && arr.indexOf(v) < 0) ? [v].concat(arr) : arr;
+        const opt = (arr, val) => arr.map(o => {
+          const value = typeof o === 'object' ? o.value : o;
+          const label = typeof o === 'object' ? o.label : o;
+          return '<option value="' + esc(value) + '"' + (String(val) === String(value) ? ' selected' : '') + '>' + esc(label) + '</option>';
+        }).join('');
+        const editSel = (label, field, arr, val) => '<label style="' + lbl + '">' + label
+          + '<select data-action="edit" data-field="' + field + '" style="' + inp + '">' + opt(arr, val) + '</select></label>';
         const stages = COLS.map(c =>
           '<button type="button" data-action="status" data-status="' + c.id + '" style="border: 1px solid ' + (sel.status === c.id ? 'var(--wlc-rover-green)' : 'var(--wlc-line)')
           + '; background: ' + (sel.status === c.id ? 'var(--wlc-rover-green)' : 'var(--wlc-white)')
@@ -854,21 +861,34 @@
           ? '<div style="font-size: 12px; color: var(--wlc-grey-mid); border-left: 3px solid var(--wlc-forest-green); padding-left: 10px;">In the Complete column for ' + dic + (dic === 1 ? ' day' : ' days') + '. '
             + (this.isArchived(sel) ? 'Archived to the Complete tab.' : (this.state.settings.autoArchive ? 'Archives in ' + (this.state.settings.archiveDays - dic) + ' days.' : 'Auto-archive is off.')) + '</div>'
           : '';
-        inner = '<div style="padding: 20px; display: flex; flex-direction: column; gap: 18px;">'
+        inner = '<div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">'
           + '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
             + '<span style="font-size: 11px; background: var(--wlc-grey); color: var(--wlc-grey-mid); padding: 5px 8px;">' + esc(sel.type) + '</span>'
             + '<span style="' + this.readyPill(sel.ready) + '">' + READY_LABEL[sel.ready] + '</span>'
             + '<span style="' + this.duePill(d.tone) + '">' + esc(d.text) + '</span>'
           + '</div>'
-          + '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">'
-            + cell('Designer', OWNER_NAMES[sel.owner] || sel.owner) + cell('Project director', sel.director)
-            + cell('Day to day contact', sel.contact) + cell('Studio days', this.effort(sel.type) + ' days at agreed lead times')
-            + cell('Provided', this.fmt(sel.provided)) + cell('Needed', this.fmt(sel.needed))
+          + '<label style="' + lbl + '">Job name<input type="text" data-action="edit" data-field="title" value="' + esc(sel.title) + '" style="' + inp + '"></label>'
+          + '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">'
+            + editSel('Client', 'client', withVal(CLIENTS, sel.client), sel.client)
+            + editSel('Type of item', 'type', TYPES, sel.type)
           + '</div>'
+          + '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">'
+            + editSel('Designer', 'owner', withVal(OWNERS, sel.owner), sel.owner)
+            + editSel('Project director', 'director', withVal(PEOPLE, sel.director), sel.director)
+          + '</div>'
+          + '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">'
+            + editSel('Day to day contact', 'contact', withVal(PEOPLE, sel.contact), sel.contact)
+            + editSel('Research status', 'ready', READY_ORDER.map(r => ({ value: r, label: READY_LABEL[r] })), sel.ready)
+          + '</div>'
+          + '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">'
+            + '<label style="' + lbl + '">Date provided<input type="date" data-action="edit" data-field="provided" value="' + (sel.provided != null ? this.iso(sel.provided) : '') + '" style="' + inp + '"></label>'
+            + '<label style="' + lbl + '">Date needed<input type="date" data-action="edit" data-field="needed" value="' + (sel.needed != null ? this.iso(sel.needed) : '') + '" style="' + inp + '"></label>'
+          + '</div>'
+          + '<div style="font-size: 12px; color: var(--wlc-grey-mid); border-left: 3px solid var(--wlc-sea-moss-green); padding-left: 10px;">At agreed lead times this is about ' + this.effort(sel.type) + ' studio days.</div>'
           + '<div style="display: flex; flex-direction: column; gap: 8px;"><div style="font-size: 10.5px; letter-spacing: 0.1em; color: var(--wlc-grey-mid);">Stage</div><div style="display: flex; flex-wrap: wrap; gap: 6px;">' + stages + '</div></div>'
           + completeNote
-          + '<div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 10.5px; letter-spacing: 0.1em; color: var(--wlc-grey-mid);">Briefing notes</div><div style="font-size: 13px; line-height: 1.5; color: var(--wlc-dark-grey); text-wrap: pretty;">' + esc(sel.notes || 'No briefing notes yet.') + '</div></div>'
-          + '<div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 10.5px; letter-spacing: 0.1em; color: var(--wlc-grey-mid);">Studio thread</div><div style="background: var(--wlc-grey); padding: 12px; font-size: 13px; line-height: 1.5;">' + esc(sel.comment || 'No messages from the studio yet.') + '</div></div>'
+          + '<label style="' + lbl + '">Briefing notes<textarea data-action="edit" data-field="notes" rows="4" style="' + inp + ' resize: vertical;">' + esc(sel.notes) + '</textarea></label>'
+          + '<label style="' + lbl + '">Studio thread<textarea data-action="edit" data-field="comment" rows="3" style="' + inp + ' resize: vertical;">' + esc(sel.comment) + '</textarea></label>'
           + '<div style="display: flex; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--wlc-line); padding-top: 16px;">'
             + '<button type="button" data-action="toTop" style="border: 1px solid var(--wlc-rover-green); background: transparent; color: var(--wlc-rover-green); padding: 10px 14px; font-size: 12px; cursor: pointer; border-radius: 0;">Move to top of queue</button>'
             + '<button type="button" data-action="complete" style="border: 0; background: var(--wlc-sea-moss-green); color: var(--wlc-rover-green); padding: 10px 14px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 0;">Mark complete</button>'
@@ -1122,6 +1142,24 @@
       }
       else if (a === 'setDays' && e.type !== 'click') { this.setSettings({ archiveDays: Math.max(1, parseInt(t.value, 10) || 14) }); }
       else if (a === 'setCap') { this.setSettings({ capacityDays: Math.min(20, Math.max(4, parseInt(t.value, 10) || 10)) }); }
+      else if (a === 'edit' && e.type === 'change') { this.onEditField(t); }
+    },
+    // Edit a field of the selected job straight to the shared board.
+    onEditField(t) {
+      const id = this.state.selected;
+      const field = t.getAttribute('data-field');
+      if (!id || !field) return;
+      let val = t.value;
+      if (field === 'needed' || field === 'provided') {
+        if (!val) return;                     // don't clear a date to NaN
+        const ms = Date.parse(val + 'T00:00:00Z');
+        if (isNaN(ms)) return;
+        val = Math.round((ms - EPOCH) / 86400000);
+      } else {
+        val = (val == null ? '' : String(val)).trim();
+        if (field === 'title' && !val) return; // never blank the title
+      }
+      this.patch(id, { [field]: val });        // patch() persists + re-renders
     },
 
     onSortDeadline() {
