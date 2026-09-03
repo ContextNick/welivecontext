@@ -224,6 +224,12 @@
       const { error } = await sb.from('jobs').upsert(items.map(it => this.itemToRow(it)), { onConflict: 'id' });
       if (error) console.warn('[wlc] bulk save failed:', error.message);
     },
+    async dbDeleteItem(id) {
+      this.cacheLocal();
+      if (!sb) return;
+      const { error } = await sb.from('jobs').delete().eq('id', id);
+      if (error) console.warn('[wlc] delete job failed:', error.message);
+    },
     async dbSaveSettings() {
       this.cacheLocal();
       if (!sb) return;
@@ -424,6 +430,7 @@
       html += this.viewHeader(stats);
       html += this.viewToolbar(tabStyle, chipStyle, vis, archived.length);
 
+      if (st.view === 'dashboard') html += this.viewDashboard();
       if (st.view === 'board')    html += this.viewBoard(boardVis, dense, showRank);
       if (st.view === 'table')    html += this.viewTable(boardVis);
       if (st.view === 'load')     html += this.viewWorkload(S);
@@ -483,6 +490,7 @@
       return ''
       + '<div style="background: var(--wlc-white); border-bottom: 1px solid var(--wlc-line); padding: 10px 28px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; position: sticky; top: 0; z-index: 6;">'
         + '<div style="display: flex; gap: 0;">'
+          + '<button type="button" data-action="view" data-view="dashboard" style="' + tabStyle(st.view === 'dashboard') + '">Dashboard</button>'
           + '<button type="button" data-action="view" data-view="board" style="' + tabStyle(st.view === 'board') + '">Board</button>'
           + '<button type="button" data-action="view" data-view="table" style="' + tabStyle(st.view === 'table') + '">Table</button>'
           + '<button type="button" data-action="view" data-view="load" style="' + tabStyle(st.view === 'load') + '">Workload</button>'
@@ -499,6 +507,80 @@
         + '<button type="button" data-action="sortDeadline" data-base="' + btnGhost + '" data-hover="' + btnGhostH + '" style="' + btnGhost + '">Reorder by deadline</button>'
         + '<button type="button" data-action="new" data-base="' + btnPrimary + '" data-hover="' + btnPrimaryH + '" style="' + btnPrimary + '">Book in work</button>'
       + '</div>';
+    },
+
+    viewDashboard() {
+      const items = this.state.items;
+      const live = items.filter(it => it.status !== 'done');
+      const past = live.filter(it => this.due(it).tone === 'late');
+      const archived = items.filter(it => this.isArchived(it));
+      const completeTotal = items.filter(it => it.status === 'done').length;
+      const byStatus = {};
+      COLS.forEach(c => { byStatus[c.id] = items.filter(it => it.status === c.id).length; });
+
+      const bigTile = (value, label, accent) =>
+        '<div style="background: var(--wlc-white); border: 1px solid var(--wlc-line); border-top: 3px solid ' + accent + '; padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 6px;">'
+        + '<div style="font-size: 34px; font-weight: 700; line-height: 1; color: var(--wlc-rover-green);">' + value + '</div>'
+        + '<div style="font-size: 11px; letter-spacing: 0.1em; color: var(--wlc-grey-mid); text-transform: uppercase;">' + label + '</div></div>';
+
+      const big = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px;">'
+        + bigTile(live.length, 'Live jobs', 'var(--wlc-sea-moss-green)')
+        + bigTile(byStatus.progress, 'In design', 'var(--wlc-sea-moss-green)')
+        + bigTile(past.length, 'Past deadline', 'var(--wlc-new-york-pink)')
+        + bigTile(completeTotal, 'Complete', 'var(--wlc-forest-green)')
+        + '</div>';
+
+      // pipeline by stage — the five board columns + the archive
+      const stageCard = (name, hint, count, accent) =>
+        '<div style="background: var(--wlc-white); border: 1px solid var(--wlc-line); display: flex; align-items: stretch;">'
+        + '<div style="width: 5px; background: ' + accent + ';"></div>'
+        + '<div style="flex: 1; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">'
+          + '<div style="display: flex; flex-direction: column; gap: 3px;"><div style="font-size: 13px; font-weight: 700; color: var(--wlc-rover-green);">' + name + '</div><div style="font-size: 11px; color: var(--wlc-grey-mid);">' + hint + '</div></div>'
+          + '<div style="font-size: 24px; font-weight: 700; color: var(--wlc-rover-green); line-height: 1;">' + count + '</div>'
+        + '</div></div>';
+      const stages = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px;">'
+        + COLS.map(c => stageCard(c.name, c.id === 'done' ? 'On the board' : c.hint, c.id === 'done' ? (byStatus.done - archived.length) : byStatus[c.id], c.accent)).join('')
+        + stageCard('Archived', 'Complete tab', archived.length, 'var(--wlc-forest-green)')
+        + '</div>';
+
+      // by designer
+      const byOwner = OWNERS.map(o => {
+        const l = live.filter(it => it.owner === o);
+        const days = l.filter(it => it.status === 'ready' || it.status === 'progress' || it.status === 'booked').reduce((a, it) => a + this.effort(it.type), 0);
+        return { name: OWNER_NAMES[o] || o, live: l.length, days: Math.round(days * 10) / 10 };
+      });
+      const ownerRows = byOwner.map(p =>
+        '<div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; border-top: 1px solid var(--wlc-line); padding: 9px 0;">'
+        + '<span style="font-weight: 500;">' + esc(p.name) + '</span>'
+        + '<span style="color: var(--wlc-grey-mid);">' + p.live + ' live · ' + p.days + ' days</span></div>').join('');
+
+      // by client (live), sorted, with a proportion bar
+      const cc = {};
+      live.forEach(it => { cc[it.client] = (cc[it.client] || 0) + 1; });
+      const clients = Object.keys(cc).map(c => ({ c: c, n: cc[c] })).sort((a, b) => b.n - a.n);
+      const maxC = clients.length ? clients[0].n : 1;
+      const clientRows = clients.map(x =>
+        '<div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px; border-top: 1px solid var(--wlc-line); padding: 7px 0;">'
+        + '<span style="flex: 0 0 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + esc(x.c) + '</span>'
+        + '<span style="flex: 1; height: 8px; background: var(--wlc-grey); position: relative;"><span style="position: absolute; inset: 0 auto 0 0; width: ' + Math.round(x.n / maxC * 100) + '%; background: var(--wlc-sea-moss-green);"></span></span>'
+        + '<span style="flex: 0 0 24px; text-align: right; color: var(--wlc-grey-mid);">' + x.n + '</span></div>').join('');
+
+      const panel = (title, inner) =>
+        '<div style="background: var(--wlc-white); border: 1px solid var(--wlc-line); padding: 16px 18px;">'
+        + '<div style="font-size: 11px; letter-spacing: 0.1em; color: var(--wlc-grey-mid); text-transform: uppercase; margin-bottom: 4px;">' + title + '</div>' + inner + '</div>';
+
+      const cols2 = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">'
+        + panel('Workload by designer', ownerRows || '<div style="font-size:12px;color:var(--wlc-grey-mid);padding-top:8px;">No live jobs.</div>')
+        + panel('Live jobs by client', clientRows || '<div style="font-size:12px;color:var(--wlc-grey-mid);padding-top:8px;">No live jobs.</div>')
+        + '</div>';
+
+      return '<div style="flex: 1; padding: 20px 28px 40px; display: flex; flex-direction: column; gap: 20px;">'
+        + '<div style="font-size: 13px; color: var(--wlc-grey-mid);">Studio overview — a live snapshot of the whole pipeline, across every designer and client.</div>'
+        + big
+        + '<div style="font-size: 11px; letter-spacing: 0.1em; color: var(--wlc-grey-mid); text-transform: uppercase;">Pipeline by stage</div>'
+        + stages
+        + cols2
+        + '</div>';
     },
 
     viewBoard(vis, dense, showRank) {
@@ -791,6 +873,15 @@
             + '<button type="button" data-action="toTop" style="border: 1px solid var(--wlc-rover-green); background: transparent; color: var(--wlc-rover-green); padding: 10px 14px; font-size: 12px; cursor: pointer; border-radius: 0;">Move to top of queue</button>'
             + '<button type="button" data-action="complete" style="border: 0; background: var(--wlc-sea-moss-green); color: var(--wlc-rover-green); padding: 10px 14px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 0;">Mark complete</button>'
           + '</div>'
+          + (this.state.confirmDelete
+              ? '<div style="display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--wlc-vintage-red); border-left: 4px solid var(--wlc-vintage-red); padding: 12px;">'
+                  + '<div style="font-size: 12.5px; line-height: 1.45; color: var(--wlc-vintage-red);"><strong>Delete this job for everyone?</strong> It is removed from the shared board and cannot be undone.</div>'
+                  + '<div style="display: flex; gap: 8px;">'
+                    + '<button type="button" data-action="delete-confirm" style="border: 0; background: var(--wlc-vintage-red); color: var(--wlc-white); padding: 9px 14px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 0;">Yes, delete</button>'
+                    + '<button type="button" data-action="delete-cancel" style="border: 1px solid var(--wlc-line); background: transparent; color: var(--wlc-grey-mid); padding: 9px 14px; font-size: 12px; cursor: pointer; border-radius: 0;">Cancel</button>'
+                  + '</div>'
+                + '</div>'
+              : '<button type="button" data-action="delete" style="border: 0; background: transparent; color: var(--wlc-vintage-red); font-size: 12px; cursor: pointer; padding: 2px 0; align-self: flex-start; text-decoration: underline;">Delete this job</button>')
         + '</div>';
       }
 
@@ -916,13 +1007,16 @@
           case 'settings': self.setState({ settingsOpen: true, confirmReset: false }); break;
           case 'closeSettings': self.setState({ settingsOpen: false, confirmReset: false }); break;
           case 'addInCol': self.setState({ drawer: 'new', selected: null, form: Object.assign({}, self.state.form, { stage: t.dataset.col }) }); break;
-          case 'close':   self.setState({ drawer: null, selected: null }); self.flushPending(); break;
-          case 'card':    self.setState({ drawer: 'detail', selected: t.dataset.id }); break;
+          case 'close':   self.setState({ drawer: null, selected: null, confirmDelete: false }); self.flushPending(); break;
+          case 'card':    self.setState({ drawer: 'detail', selected: t.dataset.id, confirmDelete: false }); break;
           case 'create':  self.onCreate(); break;
           case 'status':  self.patch(self.state.selected, { status: t.dataset.status }); break;
           case 'toTop':   self.onToTop(); break;
           case 'complete': self.patch(self.state.selected, { status: 'done' }); self.setState({ drawer: null, selected: null }); break;
           case 'restore': self.patch(t.dataset.id, { status: 'done' }); break; // withStatus resets completedAt to today
+          case 'delete': self.setState({ confirmDelete: true }); break;
+          case 'delete-cancel': self.setState({ confirmDelete: false }); break;
+          case 'delete-confirm': self.onDeleteJob(self.state.selected); break;
           case 'toggleAuto': self.setSettings({ autoArchive: !self.state.settings.autoArchive }); break;
           case 'setDays': if (t.dataset.value) self.setSettings({ archiveDays: Math.max(1, parseInt(t.dataset.value, 10) || 14) }); break;
           case 'set-colorBy': self.setSettings({ colorBy: t.dataset.value }); break;
@@ -1044,6 +1138,13 @@
       const it = this.state.items.filter(x => x.id === id)[0];
       if (it) this.move(id, it.status, 0);
     },
+    onDeleteJob(id) {
+      if (!id) return;
+      this.state.items = this.state.items.filter(x => x.id !== id);
+      this.state.drawer = null; this.state.selected = null; this.state.confirmDelete = false;
+      this.render();
+      this.dbDeleteItem(id);
+    },
     onCreate() {
       const f = this.state.form;
       if (!f.title.trim()) return;
@@ -1078,7 +1179,7 @@
       return {
         view: 'board', owner: 'all', client: 'all', query: '',
         dragId: null, dragOverCol: null, dragOverIndex: null,
-        drawer: null, selected: null, settingsOpen: false, confirmReset: false,
+        drawer: null, selected: null, settingsOpen: false, confirmReset: false, confirmDelete: false,
         form: { title: '', client: 'AA WLC Internal', owner: 'Nick', director: 'Other', contact: 'Other', type: 'PowerPoint report', needed: this.iso(this.today() + 7), ready: 'no', stage: 'booked', notes: '', link: '' }
       };
     },
