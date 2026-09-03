@@ -859,7 +859,15 @@
             + '<div style="display: flex; flex-direction: column; gap: 8px;"><div style="' + lbl + '">Rank numbers</div>' + seg('showRank', String(S.showRank), [{value:'true',label:'Show'},{value:'false',label:'Hide'}]) + '</div>'
             + '<label style="' + lbl + '; display: flex; flex-direction: column; gap: 6px;">Studio capacity<div style="display: flex; align-items: center; gap: 8px;"><input type="number" min="4" max="20" data-action="setCap" value="' + S.capacityDays + '" style="' + inp + ' width: 90px;"><span style="font-size: 13px; color: var(--wlc-dark-grey); letter-spacing: 0;">days per designer</span></div></label>'
 
-            + '<button type="button" data-action="reset" style="border: 1px solid var(--wlc-vintage-red); background: transparent; color: var(--wlc-vintage-red); padding: 10px 14px; font-size: 12px; cursor: pointer; border-radius: 0; align-self: flex-start;">Reset all data</button>'
+            + (this.state.confirmReset
+                ? '<div style="display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--wlc-vintage-red); border-left: 4px solid var(--wlc-vintage-red); padding: 14px;">'
+                    + '<div style="font-size: 12.5px; line-height: 1.45; color: var(--wlc-vintage-red);"><strong>This clears the board for everyone.</strong> All jobs are deleted and the original starting set is restored — for every viewer, not just you. This cannot be undone.</div>'
+                    + '<div style="display: flex; gap: 8px;">'
+                      + '<button type="button" data-action="reset-confirm" style="border: 0; background: var(--wlc-vintage-red); color: var(--wlc-white); padding: 10px 14px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 0;">Yes, reset for everyone</button>'
+                      + '<button type="button" data-action="reset-cancel" style="border: 1px solid var(--wlc-line); background: transparent; color: var(--wlc-grey-mid); padding: 10px 14px; font-size: 12px; cursor: pointer; border-radius: 0;">Cancel</button>'
+                    + '</div>'
+                  + '</div>'
+                : '<button type="button" data-action="reset" style="border: 1px solid var(--wlc-vintage-red); background: transparent; color: var(--wlc-vintage-red); padding: 10px 14px; font-size: 12px; cursor: pointer; border-radius: 0; align-self: flex-start;">Reset all data</button>')
           + '</div>'
         + '</div>'
       + '</div>';
@@ -905,8 +913,8 @@
           case 'owner':   self.setState({ owner: t.dataset.owner }); break;
           case 'sortDeadline': self.onSortDeadline(); break;
           case 'new':     self.setState({ drawer: 'new', selected: null }); break;
-          case 'settings': self.setState({ settingsOpen: true }); break;
-          case 'closeSettings': self.setState({ settingsOpen: false }); break;
+          case 'settings': self.setState({ settingsOpen: true, confirmReset: false }); break;
+          case 'closeSettings': self.setState({ settingsOpen: false, confirmReset: false }); break;
           case 'addInCol': self.setState({ drawer: 'new', selected: null, form: Object.assign({}, self.state.form, { stage: t.dataset.col }) }); break;
           case 'close':   self.setState({ drawer: null, selected: null }); self.flushPending(); break;
           case 'card':    self.setState({ drawer: 'detail', selected: t.dataset.id }); break;
@@ -920,7 +928,9 @@
           case 'set-colorBy': self.setSettings({ colorBy: t.dataset.value }); break;
           case 'set-density': self.setSettings({ density: t.dataset.value }); break;
           case 'set-showRank': self.setSettings({ showRank: t.dataset.value === 'true' }); break;
-          case 'reset': self.onReset(); break;
+          case 'reset': self.setState({ confirmReset: true }); break;
+          case 'reset-cancel': self.setState({ confirmReset: false }); break;
+          case 'reset-confirm': self.state.confirmReset = false; self.onReset(); break;
         }
       });
 
@@ -1071,7 +1081,7 @@
       return {
         view: 'board', owner: 'all', client: 'all', query: '',
         dragId: null, dragOverCol: null, dragOverIndex: null,
-        drawer: null, selected: null, settingsOpen: false,
+        drawer: null, selected: null, settingsOpen: false, confirmReset: false,
         form: { title: '', client: 'AA WLC Internal', owner: 'Nick', director: 'Other', contact: 'Other', type: 'PowerPoint report', needed: this.iso(this.today() + 7), ready: 'no', stage: 'booked', notes: '', link: '' }
       };
     },
